@@ -86,7 +86,7 @@ test('public routes revalidate, hide private fields and keep status variants sep
     assert.equal(bad.headers.get('cache-control'), 'no-store');
 });
 
-test('the standalone downloads router lists only latest signed builds and downloads a JAR', async t => {
+test('the standalone downloads router lists signed history, formats notes and downloads JARs', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'thm-downloads-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -101,7 +101,8 @@ test('the standalone downloads router lists only latest signed builds and downlo
         { ...release, channel: 'DEV', url: `https://example.test/updates/26.2/dev/${commit}.jar` },
         { ...release, minecraft: '26.3', url: 'https://example.test/private/file.jar' },
         release,
-        { ...release, version: 'older release', url: 'https://example.test/updates/26.2/stable/release0.9.jar' }
+        { ...release, version: '0.9', url: 'https://example.test/updates/26.2/stable/release0.9.jar',
+            notes: '### Changes\n\n- **Faster** builds\n\n<script>bad()</script>\n\n[Unsafe](javascript:bad)' }
     ];
     const payload = Buffer.from(JSON.stringify({ format: 1, entries: builds }));
     const feed = { payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') };
@@ -122,8 +123,22 @@ test('the standalone downloads router lists only latest signed builds and downlo
     assert.match(html, /Addon &lt;1.0&gt;/);
     assert.match(html, /\/updates\/26\.2\/stable\/release1\.0\.jar/);
     assert.match(html, /Download development JAR/);
-    assert.doesNotMatch(html, /private\/file|older release|https:\/\/example\.test/);
-    assert.equal((await get('/updates/style.css')).headers.get('content-type').split(';')[0], 'text/css');
+    assert.match(html, /Addon 0\.9/);
+    assert.match(html, /href="\/updates\/26\.2\/stable\/release0\.9\.jar"/);
+    assert.match(html, /<h3>Changes<\/h3>/);
+    assert.match(html, /<strong>Faster<\/strong> builds/);
+    assert.doesNotMatch(html, /private\/file|https:\/\/example\.test|<script>bad|href="javascript:/);
+    const assets = [
+        ['downloads.css', 'text/css'],
+        ['theme.js', 'text/javascript'],
+        ['thm.webp', 'image/webp'],
+        ['archivo.woff2', 'font/woff2']
+    ];
+    for (const [name, type] of assets) {
+        const response = await get('/updates/' + name, { method: 'HEAD' });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('content-type').split(';')[0], type);
+    }
     assert.equal((await get('/updates', { method: 'POST' })).status, 405);
     const download = await get('/updates/' + jar);
     assert.equal(download.headers.get('content-disposition'), 'attachment; filename="THM-Addons-26.2-release1.0.jar"');

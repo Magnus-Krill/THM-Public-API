@@ -13,7 +13,7 @@ THM Addons updates. Requests do not need a token.
 | `/users` | Minecraft usernames, rank and branch | 60 seconds |
 | `/kits` | Publicly orderable kit names and token prices | 5 minutes |
 | `/cape` | Selected cape IDs by Minecraft username | 60 seconds |
-| `/updates` | Browser downloads for the latest stable and development builds | 60 seconds |
+| `/updates` | Browser downloads, build history and release notes | 60 seconds |
 | `/updates/feed.json` | Signed THM Addons update manifest | 60 seconds |
 | `/updates/{branch}/dev/{commit}.jar` | Developer build for a full Git commit SHA | 1 year, immutable |
 | `/updates/{branch}/stable/{tag}.jar` | Stable build for a release tag | 1 year, immutable |
@@ -86,8 +86,10 @@ buckets have an `Off` prefix and their workers can include `route` and
 ## Signed updates
 
 Download releases in your browser at [THM Addons downloads](https://api.highwaymen.cc/updates/).
-The page verifies the feed signature and links to the latest build for each Minecraft
-version and channel. JAR responses are attachments.
+The page verifies the feed signature and lists available builds by Minecraft
+version and channel. Expand a build to read its release notes, find its source
+commit or check its SHA-256. GitHub hosts releases outside the signed feed.
+JAR responses are attachments.
 
 The feed contains a base64-encoded `payload` and an Ed25519 `signature`.
 Verify the signature before reading the manifest entries. Use each entry's

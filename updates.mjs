@@ -1,8 +1,9 @@
 import fs, { constants } from 'node:fs';
 import path from 'node:path';
 import { createPublicKey, verify } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
-import { renderDownloads, styles } from './downloads.mjs';
+import { renderDownloads } from './downloads.mjs';
 
 const jarLimit = 32 * 1024 * 1024;
 const feedLimit = 1024 * 1024;
@@ -11,6 +12,7 @@ const commitPattern = /^[a-f0-9]{40}$/;
 const shaPattern = /^[a-f0-9]{64}$/;
 const versionPattern = /^[0-9][A-Za-z0-9._-]{0,19}$/;
 const jarPattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}\/(?:dev\/[a-f0-9]{40}|stable\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,99})\.jar$/;
+const pageAssets = new Set(['downloads.css', 'theme.js', 'thm.webp', 'archivo.woff2']);
 
 function updaterFiles(root) {
     return async (req, res, next) => {
@@ -48,26 +50,16 @@ function updaterFiles(root) {
     };
 }
 
-async function readDownloads(root, key) {
-    const feed = path.join(await fs.promises.realpath(root), 'feed.json');
-    const handle = await fs.promises.open(feed, constants.O_RDONLY | constants.O_NOFOLLOW);
-    let raw;
-    try {
-        const stat = await handle.stat();
-        if (!stat.isFile() || stat.size > feedLimit) throw new Error('Invalid update feed');
-        raw = await handle.readFile();
-    } finally {
-        await handle.close();
-    }
+function readDownloads(raw, key) {
     const envelope = JSON.parse(raw);
     const payload = Buffer.from(envelope.payload, 'base64');
     const signature = Buffer.from(envelope.signature, 'base64');
     if (!verify(null, payload, key, signature)) throw new Error('Invalid feed signature');
     const { format, entries } = JSON.parse(payload);
     if (format !== 1 || !Array.isArray(entries) || entries.length > 100) throw new Error('Invalid update entries');
-    const latest = new Map();
+    const builds = new Map();
     for (const entry of entries) {
-        const { branch, channel, commit, minecraft, sha256, url, version } = entry ?? {};
+        const { branch, channel, commit, minecraft, notes, sha256, url, version } = entry ?? {};
         if (!['STABLE', 'DEV'].includes(channel) || typeof minecraft !== 'string' || !versionPattern.test(minecraft)
             || typeof version !== 'string' || !commitPattern.test(commit) || !shaPattern.test(sha256)) continue;
         const artifact = URL.parse(url);
@@ -77,27 +69,39 @@ async function readDownloads(root, key) {
         const jar = pathname.slice('/updates/'.length);
         if (!jarPattern.test(jar) || !jar.startsWith(`${branch}/${channel.toLowerCase()}/`)
             || (channel === 'DEV' && path.basename(jar) !== `${commit}.jar`)) continue;
-        const id = `${minecraft}/${channel}`;
-        if (!latest.has(id)) latest.set(id, { minecraft, channel, version, pathname, sha256 });
+        if (!builds.has(pathname)) builds.set(pathname, {
+            minecraft, channel, version, commit, notes: typeof notes === 'string' ? notes : '', pathname, sha256
+        });
     }
-    return [...latest.values()].sort((a, b) =>
-        b.minecraft.localeCompare(a.minecraft, 'en', { numeric: true }) || b.channel.localeCompare(a.channel));
+    return [...builds.values()].sort((a, b) => b.minecraft.localeCompare(a.minecraft, 'en', { numeric: true }));
 }
 
 export function createUpdaterRouter({ updatesDir, publicKey = livePublicKey }) {
     const key = createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
     const router = Router();
+    let rendered;
     const servePage = async (_req, res) => {
         res.set({
-            'Content-Security-Policy': "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+            'Content-Security-Policy': "default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
             'Referrer-Policy': 'no-referrer',
             'X-Content-Type-Options': 'nosniff'
         });
+        let handle;
         try {
-            const builds = await readDownloads(updatesDir, key);
-            res.set('Cache-Control', 'public, max-age=60').type('html').send(renderDownloads(builds));
+            const feed = path.join(await fs.promises.realpath(updatesDir), 'feed.json');
+            handle = await fs.promises.open(feed, constants.O_RDONLY | constants.O_NOFOLLOW);
+            const stat = await handle.stat();
+            if (!stat.isFile() || stat.size > feedLimit) throw new Error('Invalid update feed');
+            const revision = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+            if (rendered?.revision !== revision) {
+                const builds = readDownloads(await handle.readFile(), key);
+                rendered = { revision, html: renderDownloads(builds) };
+            }
+            res.set('Cache-Control', 'public, max-age=60').type('html').send(rendered.html);
         } catch {
             res.set('Cache-Control', 'no-store').status(503).type('html').send(renderDownloads(null));
+        } finally {
+            await handle?.close();
         }
     };
     const serveUpdate = updaterFiles(updatesDir);
@@ -106,8 +110,9 @@ export function createUpdaterRouter({ updatesDir, publicKey = livePublicKey }) {
             return res.set({ Allow: 'GET, HEAD', 'Cache-Control': 'no-store' }).sendStatus(405);
         }
         if (req.path === '/') return servePage(req, res, next);
-        if (req.path === '/style.css') {
-            return res.set('Cache-Control', 'public, max-age=3600').type('css').send(styles);
+        const asset = req.path.slice(1);
+        if (pageAssets.has(asset)) {
+            return res.sendFile(fileURLToPath(new URL(`./assets/${asset}`, import.meta.url)), { maxAge: '1h' });
         }
         return serveUpdate(req, res, next);
     }, (_err, _req, res, _next) => {
