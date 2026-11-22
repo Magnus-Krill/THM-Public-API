@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "exports": "./index.mjs",
-  "scripts": { "test": "node --test" },
+  "scripts": { "start": "node server.mjs", "test": "node --test" },
   "engines": { "node": ">=22" },
   "dependencies": { "express": "^5.3.0" }
 }

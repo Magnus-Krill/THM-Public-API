@@ -1,12 +1,10 @@
-import fs, { constants } from 'node:fs';
-import path from 'node:path';
 import { Router } from 'express';
+import { createUpdaterRouter } from './updates.mjs';
 
 const workerTtl = 10 * 60_000;
 const usernamePattern = /^[a-zA-Z0-9_]{1,16}$/;
 const activityKeyPattern = /^(?:Off)?(?:Dug)?(?:N|NE|E|SE|S|SW|W|NW)$/;
 const routePattern = /^(?:main|grid|other|(?:unlisted-)?(?:ring|diamond)(?:-[1-9][0-9]{0,7})?)$/;
-const jarPattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}\/(?:dev\/[a-f0-9]{40}|stable\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,99})\.jar$/;
 
 export function projectActivity(activity, includeRoutes, now, routeLabel) {
     const board = {};
@@ -75,41 +73,6 @@ function cachedJson(read, maxAge, clock) {
     };
 }
 
-function updaterFiles(root) {
-    return async (req, res, next) => {
-        res.set('Cache-Control', 'no-store');
-        const name = req.path.slice(1);
-        const jar = jarPattern.test(name);
-        if (name !== 'feed.json' && !jar) return res.sendStatus(404);
-        let handle;
-        try {
-            const [realRoot, file] = await Promise.all([fs.promises.realpath(root), fs.promises.realpath(path.join(root, name))]);
-            if (file !== path.join(realRoot, name)) return res.sendStatus(404);
-            handle = await fs.promises.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-            const stat = await handle.stat();
-            if (!stat.isFile() || stat.size > (jar ? 32 * 1024 * 1024 : 1024 * 1024)) return res.sendStatus(503);
-            res.set({
-                'Cache-Control': jar ? 'public, max-age=31536000, immutable' : 'public, max-age=60',
-                'Content-Type': jar ? 'application/java-archive' : 'application/json',
-                'ETag': `W/"${stat.ino}-${stat.size}-${stat.mtimeMs}"`
-            });
-            if (req.fresh) return res.status(304).end();
-            res.set('Content-Length', String(stat.size));
-            if (req.method === 'HEAD') return res.end();
-            const stream = handle.createReadStream();
-            handle = undefined;
-            stream.on('error', next);
-            res.on('close', () => stream.destroy());
-            stream.pipe(res);
-        } catch (err) {
-            if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(err.code)) return res.sendStatus(404);
-            next(err);
-        } finally {
-            await handle?.close();
-        }
-    };
-}
-
 export function createPublicApi({ readers, updatesDir, clock = Date.now }) {
     const router = Router();
     const mainStatus = cachedJson(now => projectActivity(readers.activity(), false, now, readers.routeLabel), 15, clock);
@@ -119,17 +82,6 @@ export function createPublicApi({ readers, updatesDir, clock = Date.now }) {
     router.get('/kits', cachedJson(() => kitCatalog(readers.kits()), 300, clock));
     router.get('/highway-lengths', cachedJson(readers.lengths, 60, clock));
     router.get('/cape', cachedJson(() => projectCapes(readers.capes()), 60, clock));
-    const serveUpdate = updaterFiles(updatesDir);
-    router.use('/updates', (req, res, next) => {
-        if (req.method !== 'GET' && req.method !== 'HEAD') {
-            return res.set({ Allow: 'GET, HEAD', 'Cache-Control': 'no-store' }).sendStatus(405);
-        }
-        return serveUpdate(req, res, next);
-    }, (_err, _req, res, _next) => {
-        if (res.headersSent) return res.destroy();
-        res.removeHeader('Content-Length');
-        res.removeHeader('ETag');
-        res.set('Cache-Control', 'no-store').sendStatus(503);
-    });
+    router.use('/updates', createUpdaterRouter({ updatesDir }));
     return router;
 }

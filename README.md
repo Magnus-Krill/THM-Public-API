@@ -13,6 +13,7 @@ THM Addons updates. Requests do not need a token.
 | `/users` | Minecraft usernames, rank and branch | 60 seconds |
 | `/kits` | Publicly orderable kit names and token prices | 5 minutes |
 | `/cape` | Selected cape IDs by Minecraft username | 60 seconds |
+| `/updates` | Browser downloads for the latest stable and development builds | 60 seconds |
 | `/updates/feed.json` | Signed THM Addons update manifest | 60 seconds |
 | `/updates/{branch}/dev/{commit}.jar` | Developer build for a full Git commit SHA | 1 year, immutable |
 | `/updates/{branch}/stable/{tag}.jar` | Stable build for a release tag | 1 year, immutable |
@@ -84,6 +85,10 @@ buckets have an `Off` prefix and their workers can include `route` and
 
 ## Signed updates
 
+Download releases in your browser at [THM Addons downloads](https://api.highwaymen.cc/updates/).
+The page verifies the feed signature and links to the latest build for each Minecraft
+version and channel. JAR responses are attachments.
+
 The feed contains a base64-encoded `payload` and an Ed25519 `signature`.
 Verify the signature before reading the manifest entries. Use each entry's
 published download URL and verify its SHA-256, branch and Minecraft version
@@ -93,6 +98,18 @@ for the publisher.
 ## Run and integrate
 
 Use Node 22 or later. Install with `npm ci` and run `npm test`.
+
+Run just the downloads, feed and JAR endpoints without KitBot:
+
+```sh
+UPDATES_DIR=/path/to/publisher/files npm start
+```
+
+The download service defaults to `127.0.0.1:4311`. Set `HOST` and `PORT` for
+your tunnel's origin, and set `UPDATES_PUBLIC_KEY` to your Base64 DER public key
+if you sign with a key other than THM's. For an independent Cloudflare Tunnel
+origin, route both `/updates` and its subpaths to this service and preserve their
+paths. Keep the existing public feed and JAR URLs for installed addon clients.
 
 The production API mounts the Express router before its authenticated write
 routes. Pass a directory containing published updater files and functions that
